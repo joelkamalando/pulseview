@@ -432,19 +432,24 @@ def fetch_stats():
                 "start": start, "end": end,
                 "minutes_asleep": mins_asleep,
                 "stages_min": {k: int(round(v)) for k, v in stages_min.items()},
+                "main": bool((sl.get("metadata") or {}).get("mainSleep")),
             })
         if sessions:
             sessions.sort(key=lambda s: s["end"], reverse=True)
-            latest = sessions[0]
+            # Prefer the main (night) sleep; a daytime nap ending later
+            # must not displace it.
+            mains = [s for s in sessions if s["main"]]
+            latest = mains[0] if mains else sessions[0]
             sleep_last = {
                 "date": latest["end"].astimezone(TORONTO).date().isoformat(),
                 "bedtime": latest["start"].astimezone(TORONTO).isoformat(),
                 "wake": latest["end"].astimezone(TORONTO).isoformat(),
                 "minutes_asleep": latest["minutes_asleep"],
                 "stages_min": latest["stages_min"],
+                "main": latest["main"],
             }
-            recent = sessions[:7]
-            sleep_7night_avg_min = int(sum(s["minutes_asleep"] for s in recent) / len(recent))
+            pool = mains[:7] if mains else sessions[:7]
+            sleep_7night_avg_min = int(sum(s["minutes_asleep"] for s in pool) / len(pool))
     except Exception as e:
         sleep_error = str(e)[:200]
 
