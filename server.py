@@ -430,7 +430,7 @@ def _parse_duration(s):
 
 def get_stats_cached():
     with _cache_lock:
-        if _cache["data"] and time.time() - _cache["at"] < 60:
+        if _cache["data"] and time.time() - _cache["at"] < 30:
             return _cache["data"]
         data = fetch_stats()
         _cache["data"] = data
@@ -462,7 +462,7 @@ async function load(){
     '<small>Fetched ' + d.fetched_at + '</small><pre>' + JSON.stringify(d, null, 2) + '</pre>';
   document.getElementById('status').textContent = '';
 }
-load(); setInterval(load, 60000);
+load(); setInterval(load, 30000);
 </script></body></html>"""
 
 
