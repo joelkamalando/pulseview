@@ -15,7 +15,7 @@
     user-select: none; -webkit-user-select: none;
   }
   #deck {
-    display: flex; width: 1200px; height: 600px;
+    display: flex; width: 2400px; height: 600px;
     transition: transform .28s ease-out;
   }
   .screen {
@@ -64,6 +64,21 @@
     display: none;
   }
   .dim { color: #666; }
+  /* Sleep screen */
+  .bignum2 { font-size: 104px; line-height: 1; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .sub2 { font-size: 28px; color: #bbb; margin-top: 10px; }
+  .stagebar { display: flex; width: 100%; height: 36px; border-radius: 9px; overflow: hidden; margin: 24px 0 14px; background: #111; }
+  .stagebar span { display: block; height: 100%; }
+  .seg-deep { background: #4f46e5; } .seg-light { background: #38bdf8; } .seg-rem { background: #a78bfa; } .seg-awake { background: #444; }
+  .stagelegend { width: 100%; }
+  .stagelegend .srow { display: flex; justify-content: space-between; font-size: 26px; padding: 6px 6px; border-bottom: 1px solid #1a1a1a; color: #ddd; }
+  .stagelegend .chip { display: inline-block; width: 18px; height: 18px; border-radius: 4px; margin-right: 10px; vertical-align: -2px; }
+  .hint { font-size: 24px; color: #888; margin-top: 14px; line-height: 1.4; }
+  /* Recovery screen (compact rows so all 4 fit in 600px) */
+  .recnum { font-size: 110px; line-height: .95; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .recnote { font-size: 24px; color: #888; margin: 8px 0 4px; }
+  .row.compact { padding: 8px 6px; }
+  .row.compact .v { font-size: 46px; }
 </style>
 </head>
 <body>
@@ -93,25 +108,49 @@
     </div>
     <div class="today-list" id="today-list"></div>
   </section>
+
+  <!-- Screen 3: Sleep — last night -->
+  <section class="screen" id="screen-sleep">
+    <div class="label">Sleep</div>
+    <div class="bignum2" id="sleep-hours">&mdash;</div>
+    <div class="sub2" id="sleep-times"></div>
+    <div class="stagebar" id="stagebar" style="display:none">
+      <span class="seg-deep" id="seg-deep"></span><span class="seg-light" id="seg-light"></span><span class="seg-rem" id="seg-rem"></span><span class="seg-awake" id="seg-awake"></span>
+    </div>
+    <div class="stagelegend" id="stagelegend"></div>
+    <div class="hint" id="sleep-hint"></div>
+  </section>
+
+  <!-- Screen 4: Recovery — HRV, oxygen, weight -->
+  <section class="screen" id="screen-recovery">
+    <div class="label">Recovery</div>
+    <div class="recnum" id="rec-score">&mdash;</div>
+    <div class="recnote" id="rec-note">PulseView estimate &mdash; not Fitbit&rsquo;s score</div>
+    <div class="row compact"><span class="k">HRV today</span><span class="v" id="hrv">&mdash;</span></div>
+    <div class="row compact"><span class="k">Overnight HR</span><span class="v" id="rest-hr">&mdash;</span></div>
+    <div class="row compact"><span class="k">Oxygen</span><span class="v" id="spo2">&mdash;</span></div>
+    <div class="row compact"><span class="k">Weight</span><span class="v" id="weight">&mdash;</span></div>
+  </section>
 </div>
 
 <div id="footer">
   <span class="pagedot on" id="dot0"></span>
   <span class="pagedot" id="dot1"></span>
+  <span class="pagedot" id="dot2"></span>
+  <span class="pagedot" id="dot3"></span>
   <span id="updated">PulseView</span>
 </div>
 
 <script>
 (function () {
   var deck = document.getElementById('deck');
-  var page = 0; // 0 = Right now, 1 = Today
+  var page = 0; // 0 = Right now, 1 = Today, 2 = Sleep, 3 = Recovery
   var errEl = document.getElementById('err');
 
   function show(p) {
-    page = Math.max(0, Math.min(1, p));
+    page = Math.max(0, Math.min(3, p));
     deck.style.transform = 'translateX(' + (-page * 600) + 'px)';
-    document.getElementById('dot0').classList.toggle('on', page === 0);
-    document.getElementById('dot1').classList.toggle('on', page === 1);
+    for (var i = 0; i < 4; i++) document.getElementById('dot' + i).classList.toggle('on', page === i);
   }
   function next() { show(page + 1); }
   function prev() { show(page - 1); }
@@ -143,6 +182,19 @@
     if (ageS < 60) return 'just now';
     var m = Math.round(ageS / 60);
     return m === 1 ? '1 min ago' : m + ' min ago';
+  }
+  function fmtClock(iso) {
+    if (!iso) return '';
+    return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+  function fmtDate(iso) {
+    if (!iso) return '';
+    return new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+  function fmtDur(min) {
+    if (min == null) return '\u2014';
+    var h = Math.floor(min / 60), m = Math.round(min % 60);
+    return h ? h + 'h ' + (m < 10 ? '0' : '') + m + 'm' : m + 'm';
   }
 
   function render(d) {
@@ -189,6 +241,65 @@
         return '<div>' + name + ' &middot; ' + [mins, kcal].filter(Boolean).join(' &middot; ') + '</div>';
       }).join('');
     }
+
+    // --- Sleep screen ---
+    var sl = d.sleep;
+    var sbar = document.getElementById('stagebar');
+    var sleg = document.getElementById('stagelegend');
+    var shint = document.getElementById('sleep-hint');
+    if (sl) {
+      document.getElementById('sleep-hours').textContent = fmtDur(sl.minutes_asleep);
+      document.getElementById('sleep-times').textContent =
+        fmtClock(sl.bedtime) + ' \u2192 ' + fmtClock(sl.wake) + ' \u00b7 ' + fmtDate(sl.wake);
+      var sm = sl.stages_min || {};
+      var total = (sm.deep || 0) + (sm.light || 0) + (sm.rem || 0) + (sm.awake || 0);
+      if (total > 0) {
+        sbar.style.display = 'flex';
+        document.getElementById('seg-deep').style.width = (100 * (sm.deep || 0) / total) + '%';
+        document.getElementById('seg-light').style.width = (100 * (sm.light || 0) / total) + '%';
+        document.getElementById('seg-rem').style.width = (100 * (sm.rem || 0) / total) + '%';
+        document.getElementById('seg-awake').style.width = (100 * (sm.awake || 0) / total) + '%';
+        sleg.innerHTML = [['Deep', sm.deep, 'seg-deep'], ['Light', sm.light, 'seg-light'],
+          ['REM', sm.rem, 'seg-rem'], ['Awake', sm.awake, 'seg-awake']].map(function (r) {
+          return '<div class="srow"><span><span class="chip ' + r[2] + '"></span>' + r[0] +
+            '</span><span>' + fmtDur(r[1] || 0) + '</span></div>';
+        }).join('');
+      } else {
+        sbar.style.display = 'none';
+        sleg.innerHTML = '';
+      }
+      shint.textContent = d.sleep_7night_avg_min != null
+        ? ('7-night avg ' + fmtDur(d.sleep_7night_avg_min)) : '';
+    } else {
+      document.getElementById('sleep-hours').textContent = '\u2014';
+      document.getElementById('sleep-times').textContent = '';
+      sbar.style.display = 'none';
+      sleg.innerHTML = '';
+      shint.textContent = (d.sleep_error && /scope/i.test(d.sleep_error))
+        ? 'Sleep needs one more Google permission \u2014 re-authorize to unlock it'
+        : 'No sleep recorded yet';
+    }
+
+    // --- Recovery screen ---
+    var rec = d.recovery;
+    document.getElementById('rec-score').textContent = (rec && rec.score != null) ? rec.score : '\u2014';
+    document.getElementById('rec-note').textContent =
+      (rec && rec.basis && rec.basis.length === 1 && rec.basis[0] === 'hrv')
+        ? 'PulseView estimate \u2014 HRV only, sleep pending'
+        : 'PulseView estimate \u2014 not Fitbit\u2019s score';
+    var hv = d.hrv_today;
+    document.getElementById('hrv').innerHTML = (hv && hv.avg_ms != null)
+      ? hv.avg_ms + '<small> ms \u00b7 avg ' + (d.hrv_baseline_ms != null ? d.hrv_baseline_ms : '\u2014') + '</small>'
+      : '\u2014';
+    document.getElementById('rest-hr').innerHTML = (hv && hv.non_rem_hr != null)
+      ? hv.non_rem_hr + '<small> bpm</small>' : '\u2014';
+    var ox = d.spo2;
+    document.getElementById('spo2').innerHTML = (ox && ox.percentage != null)
+      ? ox.percentage + '<small> %</small>' : '\u2014';
+    var w = d.weight;
+    document.getElementById('weight').innerHTML = (w && w.kg != null)
+      ? w.kg.toFixed(1) + '<small> kg' + (w.prev_kg != null ? ' \u00b7 was ' + w.prev_kg.toFixed(1) : '') + '</small>'
+      : '\u2014';
 
     var t = new Date(d.fetched_at);
     document.getElementById('updated').textContent =

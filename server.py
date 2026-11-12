@@ -55,6 +55,7 @@ API_BASE = "https://health.googleapis.com/v4"
 SCOPES = [
     "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly",
     "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly",
+    "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
 ]
 
 # Pending PKCE flows: state -> code_verifier
@@ -389,6 +390,149 @@ def fetch_stats():
         workouts_today = workouts_today or []
         workouts_week = workouts_week or []
 
+    # --- sleep: latest session (+ 7-night average) ---
+    # Needs the sleep.readonly scope; until re-authorized the list call 403s
+    # and sleep stays None with sleep_error explaining why.
+    sleep_last = None
+    sleep_7night_avg_min = None
+    sleep_error = None
+    try:
+        resp = _api("GET", "/users/me/dataTypes/sleep/dataPoints", params={"pageSize": 50})
+        sessions = []
+        for p in resp.get("dataPoints", []):
+            sl = p.get("sleep", {})
+            iv = sl.get("interval", {})
+            st, en = iv.get("startTime"), iv.get("endTime")
+            if not st or not en:
+                continue
+            start = datetime.fromisoformat(st.replace("Z", "+00:00"))
+            end = datetime.fromisoformat(en.replace("Z", "+00:00"))
+            summ = sl.get("summary", {}) or {}
+            try:
+                mins_asleep = int(summ.get("minutesAsleep"))
+            except (TypeError, ValueError):
+                mins_asleep = int((end - start).total_seconds() // 60)
+            stages_min = {"deep": 0.0, "light": 0.0, "rem": 0.0, "awake": 0.0}
+            for seg in sl.get("stages", []) or []:
+                sst, sen = seg.get("startTime"), seg.get("endTime")
+                if not sst or not sen:
+                    continue
+                mins = (datetime.fromisoformat(sen.replace("Z", "+00:00")) -
+                        datetime.fromisoformat(sst.replace("Z", "+00:00"))).total_seconds() / 60
+                t = seg.get("type")
+                if t == "DEEP":
+                    stages_min["deep"] += mins
+                elif t in ("LIGHT", "ASLEEP"):
+                    stages_min["light"] += mins
+                elif t == "REM":
+                    stages_min["rem"] += mins
+                elif t in ("AWAKE", "RESTLESS"):
+                    stages_min["awake"] += mins
+            sessions.append({
+                "start": start, "end": end,
+                "minutes_asleep": mins_asleep,
+                "stages_min": {k: int(round(v)) for k, v in stages_min.items()},
+            })
+        if sessions:
+            sessions.sort(key=lambda s: s["end"], reverse=True)
+            latest = sessions[0]
+            sleep_last = {
+                "date": latest["end"].astimezone(TORONTO).date().isoformat(),
+                "bedtime": latest["start"].astimezone(TORONTO).isoformat(),
+                "wake": latest["end"].astimezone(TORONTO).isoformat(),
+                "minutes_asleep": latest["minutes_asleep"],
+                "stages_min": latest["stages_min"],
+            }
+            recent = sessions[:7]
+            sleep_7night_avg_min = int(sum(s["minutes_asleep"] for s in recent) / len(recent))
+    except Exception as e:
+        sleep_error = str(e)[:200]
+
+    # --- daily HRV: latest day + 7-day baseline (excl. latest) ---
+    hrv_today = None
+    hrv_baseline_ms = None
+    try:
+        resp = _api("GET", "/users/me/dataTypes/daily-heart-rate-variability/dataPoints",
+                    params={"pageSize": 14})
+        days = []
+        for p in resp.get("dataPoints", []):
+            hv = p.get("dailyHeartRateVariability", {}) or {}
+            avg = hv.get("averageHeartRateVariabilityMilliseconds")
+            if avg is None:
+                continue
+            dd = hv.get("date", {}) or {}
+            days.append({
+                "date": "%04d-%02d-%02d" % (dd.get("year", 0), dd.get("month", 0), dd.get("day", 0)),
+                "avg_ms": float(avg),
+                "deep_rmssd_ms": hv.get("deepSleepRootMeanSquareOfSuccessiveDifferencesMilliseconds"),
+                "non_rem_hr": hv.get("nonRemHeartRateBeatsPerMinute"),
+            })
+        days.sort(key=lambda x: x["date"], reverse=True)
+        if days:
+            hrv_today = days[0]
+            prior = [x["avg_ms"] for x in days[1:8]]
+            if prior:
+                hrv_baseline_ms = round(sum(prior) / len(prior), 1)
+    except Exception:
+        pass
+
+    # --- blood oxygen: latest SpO2 sample ---
+    spo2 = None
+    try:
+        resp = _api("GET", "/users/me/dataTypes/oxygen-saturation/dataPoints", params={"pageSize": 10})
+        best = None
+        for p in resp.get("dataPoints", []):
+            ox = p.get("oxygenSaturation", {}) or {}
+            st = (ox.get("sampleTime") or {}).get("physicalTime")
+            pct = ox.get("percentage")
+            if st and pct is not None:
+                at = datetime.fromisoformat(st.replace("Z", "+00:00"))
+                if best is None or at > best[0]:
+                    best = (at, float(pct))
+        if best:
+            spo2 = {"percentage": best[1], "at": best[0].astimezone(TORONTO).isoformat(),
+                    "age_seconds": max(0, int((datetime.now(timezone.utc) - best[0]).total_seconds()))}
+    except Exception:
+        pass
+
+    # --- weight: latest log (+ previous for delta) ---
+    weight = None
+    try:
+        resp = _api("GET", "/users/me/dataTypes/weight/dataPoints", params={"pageSize": 30})
+        pts = []
+        for p in resp.get("dataPoints", []):
+            w = p.get("weight", {}) or {}
+            g = w.get("weightGrams")
+            st = (w.get("sampleTime") or {}).get("physicalTime")
+            if g is not None and st:
+                pts.append((datetime.fromisoformat(st.replace("Z", "+00:00")), float(g) / 1000.0))
+        pts.sort(key=lambda x: x[0], reverse=True)
+        if pts:
+            weight = {"kg": round(pts[0][1], 1),
+                      "at": pts[0][0].astimezone(TORONTO).isoformat(),
+                      "prev_kg": round(pts[1][1], 1) if len(pts) > 1 else None}
+    except Exception:
+        pass
+
+    # --- recovery estimate (PulseView's own, NOT Fitbit's Readiness Score) ---
+    # HRV vs 7-day baseline (60%) + sleep hours vs 8h target (40%).
+    recovery = None
+    try:
+        comps = {}
+        if hrv_today is not None and hrv_baseline_ms:
+            ratio = hrv_today["avg_ms"] / hrv_baseline_ms
+            comps["hrv"] = max(0, min(100, int(round((ratio - 0.6) / 0.8 * 100))))
+        if sleep_last is not None:
+            comps["sleep"] = max(0, min(100, int(round(sleep_last["minutes_asleep"] / 480 * 100))))
+        if comps:
+            weights = {"hrv": 0.6, "sleep": 0.4}
+            total_w = sum(weights[k] for k in comps)
+            score = int(round(sum(comps[k] * weights[k] for k in comps) / total_w))
+            recovery = {"score": score, "basis": sorted(comps.keys()),
+                        "hrv_score": comps.get("hrv"), "sleep_score": comps.get("sleep")}
+    except Exception:
+        recovery = None
+
     return {
         "fetched_at": datetime.now(TORONTO).isoformat(),
         "timezone": "America/Toronto",
@@ -399,6 +543,14 @@ def fetch_stats():
         "workouts_this_week": len(workouts_week),
         "workouts_this_week_detail": workouts_week,
         "plan_target_per_week": 5,
+        "sleep": sleep_last,
+        "sleep_7night_avg_min": sleep_7night_avg_min,
+        "sleep_error": sleep_error,
+        "hrv_today": hrv_today,
+        "hrv_baseline_ms": hrv_baseline_ms,
+        "spo2": spo2,
+        "weight": weight,
+        "recovery": recovery,
     }
 
 
