@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=600, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>PulseView</title>
+<style>
+  /* PulseView — glasses web app. 600x600 additive display: black is
+     transparent, so everything sits on pure black with bright type. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 600px; height: 600px; overflow: hidden; background: #000; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: #fff; -webkit-font-smoothing: antialiased;
+    user-select: none; -webkit-user-select: none;
+  }
+  #deck {
+    display: flex; width: 1200px; height: 600px;
+    transition: transform .28s ease-out;
+  }
+  .screen {
+    width: 600px; height: 600px; flex: 0 0 600px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 48px 44px 64px; text-align: center;
+  }
+  .label {
+    font-size: 26px; letter-spacing: 6px; text-transform: uppercase;
+    color: #7dd3fc; font-weight: 600; margin-bottom: 10px;
+  }
+  .bignum { font-size: 220px; line-height: .95; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .unit { font-size: 40px; color: #bbb; font-weight: 500; margin-top: 6px; }
+  .fresh { font-size: 26px; color: #aaa; margin-top: 18px; }
+  .fresh.stale { color: #fbbf24; }
+  .heart { width: 84px; height: 84px; margin-bottom: 6px; }
+  .heart svg { width: 100%; height: 100%; }
+  .heart.beating svg { animation: beat 1s ease-in-out infinite; transform-origin: center; }
+  @keyframes beat { 0%,100% { transform: scale(1); } 12% { transform: scale(1.14); } 24% { transform: scale(1); } }
+  /* Today screen */
+  .row { display: flex; justify-content: space-between; align-items: baseline; width: 100%; padding: 14px 6px; border-bottom: 1px solid #222; }
+  .row .k { font-size: 28px; letter-spacing: 3px; text-transform: uppercase; color: #7dd3fc; font-weight: 600; }
+  .row .v { font-size: 64px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .row .v small { font-size: 28px; color: #bbb; font-weight: 500; }
+  .wk { width: 100%; margin-top: 26px; }
+  .wk .k { font-size: 28px; letter-spacing: 3px; text-transform: uppercase; color: #7dd3fc; font-weight: 600; }
+  .wk .count { font-size: 72px; font-weight: 700; margin: 6px 0 14px; font-variant-numeric: tabular-nums; }
+  .wk .count small { font-size: 34px; color: #bbb; font-weight: 500; }
+  .dots { display: flex; justify-content: center; gap: 18px; }
+  .dots .dot { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #555; }
+  .dots .dot.on { background: #4ade80; border-color: #4ade80; }
+  .today-list { width: 100%; margin-top: 18px; font-size: 26px; color: #ddd; text-align: left; }
+  .today-list div { padding: 6px 6px; border-bottom: 1px solid #1a1a1a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .empty { color: #888; }
+  /* footer: page dots + updated time */
+  #footer {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 52px; width: 600px;
+    display: flex; align-items: center; justify-content: center; gap: 14px;
+    font-size: 22px; color: #888; background: #000;
+  }
+  #footer .pagedot { width: 14px; height: 14px; border-radius: 50%; background: #333; }
+  #footer .pagedot.on { background: #fff; }
+  #err {
+    position: fixed; left: 0; right: 0; top: 0; width: 600px; padding: 10px;
+    background: #7f1d1d; color: #fff; font-size: 22px; text-align: center;
+    display: none;
+  }
+  .dim { color: #666; }
+</style>
+</head>
+<body>
+<div id="err"></div>
+
+<div id="deck">
+  <!-- Screen 1: Right now — heart rate -->
+  <section class="screen" id="screen-hr">
+    <div class="heart" id="heart"><svg viewBox="0 0 100 100" aria-hidden="true">
+      <path d="M50 88 C20 64 8 46 8 30 C8 16 19 8 31 8 C40 8 47 13 50 20 C53 13 60 8 69 8 C81 8 92 16 92 30 C92 46 80 64 50 88 Z" fill="#f87171"/>
+    </svg></div>
+    <div class="label">Heart rate</div>
+    <div class="bignum" id="hr-bpm">&mdash;</div>
+    <div class="unit">beats per minute</div>
+    <div class="fresh" id="hr-fresh">waiting for sync&hellip;</div>
+  </section>
+
+  <!-- Screen 2: Today — steps, calories, workouts -->
+  <section class="screen" id="screen-today">
+    <div class="label">Today</div>
+    <div class="row"><span class="k">Steps</span><span class="v" id="steps">&mdash;</span></div>
+    <div class="row"><span class="k">Calories</span><span class="v" id="cals">&mdash;<small> kcal</small></span></div>
+    <div class="wk">
+      <div class="k">Workouts this week</div>
+      <div class="count" id="wk-count">&mdash;<small> / 5</small></div>
+      <div class="dots" id="wk-dots"></div>
+    </div>
+    <div class="today-list" id="today-list"></div>
+  </section>
+</div>
+
+<div id="footer">
+  <span class="pagedot on" id="dot0"></span>
+  <span class="pagedot" id="dot1"></span>
+  <span id="updated">PulseView</span>
+</div>
+
+<script>
+(function () {
+  var deck = document.getElementById('deck');
+  var page = 0; // 0 = Right now, 1 = Today
+  var errEl = document.getElementById('err');
+
+  function show(p) {
+    page = Math.max(0, Math.min(1, p));
+    deck.style.transform = 'translateX(' + (-page * 600) + 'px)';
+    document.getElementById('dot0').classList.toggle('on', page === 0);
+    document.getElementById('dot1').classList.toggle('on', page === 1);
+  }
+  function next() { show(page + 1); }
+  function prev() { show(page - 1); }
+
+  // D-pad / keyboard
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { next(); e.preventDefault(); }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { prev(); e.preventDefault(); }
+  });
+  // Touch swipe (Neural Band swipes surface as touch on the glasses)
+  var sx = 0, sy = 0;
+  document.addEventListener('touchstart', function (e) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
+  document.addEventListener('touchend', function (e) {
+    var dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) { dx < 0 ? next() : prev(); }
+  }, { passive: true });
+  // Mouse drag (desktop testing)
+  var mx = null;
+  document.addEventListener('mousedown', function (e) { mx = e.clientX; });
+  document.addEventListener('mouseup', function (e) {
+    if (mx === null) return;
+    var dx = e.clientX - mx; mx = null;
+    if (Math.abs(dx) > 60) { dx < 0 ? next() : prev(); }
+  });
+
+  function fmt(n) { return n == null ? '\u2014' : Number(n).toLocaleString('en-US'); }
+  function minsAgo(ageS) {
+    if (ageS == null) return null;
+    if (ageS < 60) return 'just now';
+    var m = Math.round(ageS / 60);
+    return m === 1 ? '1 min ago' : m + ' min ago';
+  }
+
+  function render(d) {
+    var hr = d.heart_rate || {};
+    var bpmEl = document.getElementById('hr-bpm');
+    var freshEl = document.getElementById('hr-fresh');
+    var heartEl = document.getElementById('heart');
+    if (hr.bpm != null) {
+      bpmEl.textContent = hr.bpm;
+      var ago = minsAgo(hr.age_seconds);
+      freshEl.textContent = ago ? ('synced ' + ago) : '';
+      freshEl.classList.toggle('stale', hr.age_seconds != null && hr.age_seconds > 900);
+      heartEl.classList.add('beating');
+    } else {
+      bpmEl.textContent = '\u2014';
+      freshEl.textContent = hr.error ? 'sync error — retrying' : 'no reading yet';
+      freshEl.classList.add('stale');
+      heartEl.classList.remove('beating');
+    }
+
+    document.getElementById('steps').textContent = fmt(d.steps_today);
+    var cals = d.calories_today == null ? '\u2014' : Math.round(d.calories_today).toLocaleString('en-US');
+    document.getElementById('cals').innerHTML = cals + '<small> kcal</small>';
+
+    var wk = d.workouts_this_week || 0, target = d.plan_target_per_week || 5;
+    document.getElementById('wk-count').innerHTML = wk + '<small> / ' + target + '</small>';
+    var dots = document.getElementById('wk-dots');
+    dots.innerHTML = '';
+    for (var i = 0; i < target; i++) {
+      var s = document.createElement('span');
+      s.className = 'dot' + (i < wk ? ' on' : '');
+      dots.appendChild(s);
+    }
+
+    var list = document.getElementById('today-list');
+    var today = d.workouts_today || [];
+    if (!today.length) {
+      list.innerHTML = '<div class="empty">No workouts yet today</div>';
+    } else {
+      list.innerHTML = today.map(function (w) {
+        var mins = w.duration_seconds ? Math.round(w.duration_seconds / 60) + ' min' : '';
+        var kcal = w.calories_kcal ? Math.round(w.calories_kcal) + ' kcal' : '';
+        var name = w.name || w.type || 'Workout';
+        return '<div>' + name + ' &middot; ' + [mins, kcal].filter(Boolean).join(' &middot; ') + '</div>';
+      }).join('');
+    }
+
+    var t = new Date(d.fetched_at);
+    document.getElementById('updated').textContent =
+      'Updated ' + t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+
+  var fails = 0;
+  // Carry the access key (?k=) from the page URL into API calls.
+  var KEY = new URLSearchParams(location.search).get('k');
+  var STATS_URL = '/api/stats' + (KEY ? ('?k=' + encodeURIComponent(KEY)) : '');
+  async function load() {
+    try {
+      var r = await fetch(STATS_URL, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var d = await r.json();
+      fails = 0;
+      errEl.style.display = 'none';
+      render(d);
+    } catch (e) {
+      fails++;
+      errEl.textContent = 'Couldn\u2019t reach PulseView — showing last data';
+      errEl.style.display = 'block';
+    }
+  }
+
+  load();
+  setInterval(load, 60000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) load(); });
+})();
+</script>
+</body>
+</html>

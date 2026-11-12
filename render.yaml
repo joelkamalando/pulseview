@@ -1,0 +1,19 @@
+# PulseView — Fitbit stats on Meta Ray-Ban Display glasses
+# Render deployment (free tier). No build step: stdlib-only Python.
+
+services:
+  - type: web
+    name: pulseview
+    env: python
+    plan: free
+    buildCommand: "echo 'no build needed (stdlib only)'"
+    startCommand: "python3 server.py"
+    envVars:
+      - key: PULSEVIEW_HOST
+        value: 0.0.0.0
+      # Set these in the Render dashboard (never commit secrets):
+      # PULSEVIEW_CLIENT_ID        — Google OAuth Web client id
+      # PULSEVIEW_CLIENT_SECRET    — Google OAuth Web client secret
+      # PULSEVIEW_REDIRECT_URI     — https://<service>.onrender.com/oauth/callback
+      # PULSEVIEW_TOKENS           — JSON of tokens.json (refresh token)
+      # PULSEVIEW_KEY              — access key required as ?k= on / and /api/stats
